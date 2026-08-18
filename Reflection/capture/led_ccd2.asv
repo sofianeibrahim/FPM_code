@@ -1,0 +1,44 @@
+% === main.m ===
+% 主程序：初始化串口、相机和采集状态，执行LED扫描图像采集
+
+clc; clear;
+
+%% 1. 初始化串口
+comPort = "COM3";       % 根据实际串口名修改
+baudRate = 9600;
+serialObj = init_serialport(comPort, baudRate);  % <== 调用你已有的函数
+fprintf("⏳ 等待 Arduino READY...\n");
+
+while true
+    if serialObj.NumBytesAvailable > 0
+        msg = readline(acqState.serialObj);
+        msg = strtrim(string(msg));
+        fprintf("[Arduino] %s\n", msg);
+        
+        if contains(upper(msg), "READY")
+            fprintf("✅ Arduino is ready.\n");
+            break;
+        end
+    end
+end
+
+%% 2. 初始化相机
+vid = init_camera();    % <== 调用你已有的函数
+
+%% 3. 初始化采集状态对象
+acqState = AcqStateHandle();
+acqState.serialObj = serialObj;
+
+%% 4. 执行LED扫描采图任务
+run_led_capture_sequence(vid, acqState);
+
+%% 5. 释放资源（可选）
+fclose(serialObj);
+delete(serialObj);
+clear serialObj;
+stop(vid);
+delete(vid);
+clear vid;
+
+imaqreset;  % 如果设备一直卡住，可以强制重置
+

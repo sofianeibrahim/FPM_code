@@ -1,0 +1,195 @@
+function [O_rec, phase_rec, P_rec, err_curve] = Algorithm_QN(ImagesIn, LED_Array, systemSetup, options, centerTag)
+% Algorithm_QN_complete - Quasi-Newton FPM single-crop recon (complete)
+% Inputs:
+%   ImagesIn    - [Ny x Nx x Nimgs] cropped image stack
+%   LED_Array   - cell array with LED tags ('77','6a',...)
+%   systemSetup - struct with fields: LEDspacing(mm), LEDheight(mm),
+%                 camPixSize(um), lambda(um), NA, magnification
+%   options     - struct: maxIter, alpha, beta, IntCorr (0/1), initialPupil
+%   centerTag   - e.g. '77' identify the central LED tag in LED_Array
+%
+% Outputs:
+%   O_rec, phase_rec, P_rec, err_curve
+
+%% 1) basic sizes and spatial-frequency sampling (dux, duy)
+ImagesIn = double(ImagesIn);
+[Ny, Nx, Nimgs] = size(ImagesIn);
+pixSizeObj = systemSetup.camPixSize / systemSetup.magnification; % um (object plane)
+FoVx = Nx * pixSizeObj;    % um
+FoVy = Ny * pixSizeObj;    % um
+
+% dux, duy: spatial-frequency sampling (1/um)
+if mod(Nx,2) == 1
+    dux = 1 / pixSizeObj / (Nx - 1);
+else
+    dux = 1 / FoVx;
+end
+if mod(Ny,2) == 1
+    duy = 1 / pixSizeObj / (Ny - 1);
+else
+    duy = 1 / FoVy;
+end
+
+%% 2) LED -> frequency indices (use helper)
+[idx_X, idx_Y, illuminationNA] = LEDcoord_from_array_reflect(LED_Array, centerTag, systemSetup, dux, duy);
+% %% reflective mode
+% [idx_X, idx_Y, illuminationNA] = LEDcoord_from_array_reflect(LED_Array, systemSetup, dux, duy);
+% max distance in Fourier space between adjacent LEDs
+sp0 = max([abs(diff(idx_X)), abs(diff(idx_Y))]); % 一维 cell 的相邻差值
+mx = round(sp0/3);
+if mx < 3
+    mx = 3;
+end
+%% 3) compute synthetic NA and choose N_obj (canvas size)
+um_m = systemSetup.NA / systemSetup.lambda; % objective bandwidth (1/um)
+um_p = max(illuminationNA(:))/systemSetup.lambda + um_m; % combined max freq (1/um)
+disp(['synthetic NA is ', num2str(um_p * systemSetup.lambda)]);
+
+% estimate required object freq size in x
+N_objX2 = round(2 * um_p / dux) * 2;       % even
+% enforce N_objX integer multiple of Nx to avoid FT artifacts
+N_objX = ceil(N_objX2 / Nx) * Nx;
+if N_objX == Nx
+    N_objX = N_objX * 2;
+end
+N_objY = round(Ny * N_objX / Nx);  % keep aspect ratio
+
+%% 4) initialize FT/IFT, pupil, O canvas
+FT  = @(x) fftshift(fft2(ifftshift(x)));
+IFT = @(x) fftshift(ifft2(ifftshift(x)));
+
+%% pupil support (binary disk, adapted to ROI size)
+m = 1:Nx;
+n = 1:Ny;
+[mm, nn] = meshgrid(m - round((Nx+1)/2), n - round((Ny+1)/2));
+
+% Normalise the coordinates to ensure the aspect ratio is correct
+if Nx > Ny
+    nn = nn * max(abs(mm(:))) / max(abs(nn(:)));
+else
+    mm = mm * max(abs(nn(:))) / max(abs(mm(:)));
+end
+
+% Radius (in pixels)
+ridx = sqrt(mm.^2 + nn.^2);
+
+% pupil 半径对应的索引 (由NA决定)
+um_idx = um_m / min(dux, duy);
+
+% Initial pupil (binary disk)
+pupil0 = double(ridx < um_idx);
+
+% Apply an initialization strategy (such as a plane wave or adding noise, etc.)
+P = initPupil(pupil0, options.initialPupil);
+
+
+%% large canvas O in frequency domain
+cen0 = round(( [N_objY, N_objX] + 1 ) / 2);
+O = zeros(N_objY, N_objX);
+
+% initialize O using the first image (central LED)
+idx_center_img = 1;  % The first image shows the central LED
+Os = FT(sqrt(ImagesIn(:,:,idx_center_img)));
+
+n1 = cen0 - floor([Ny, Nx]/2);
+n2 = n1 + [Ny, Nx] - 1;
+
+O(n1(1):n2(1), n1(2):n2(2)) = Os .* P;
+
+
+%% 6) Intensity correction init
+c = ones(1, Nimgs);   % 一A two-dimensional array whose length equals the number of LEDs
+
+%% 7) main QN loop
+err_curve = zeros(options.maxIter,1);
+
+%Folder for intermediate reconstructions
+if isfield(options,'saveIterations') && options.saveIterations == 1
+    if ~isfield(optios,'saveFolder')
+        options.saveFolder = fullfile(pwd,'Reconstruction_Iterations');
+    end
+
+    if ~exist(())
+
+for it = 1:options.maxIter
+    err_iter = zeros(Nimgs,1);
+
+    for i = 1:Nimgs
+       
+
+        % frequency index for this LED
+        nX = idx_X(i);
+        nY = idx_Y(i);
+        cen = cen0 + [nY, nX];                % center in big canvas
+
+        % crop subregion from O (ensure indices integer)
+        n1r = cen(1) - floor(Ny/2); n2r = n1r + Ny - 1;
+        n1c = cen(2) - floor(Nx/2); n2c = n1c + Nx - 1;
+        % guard boundaries (should not happen if N_obj chosen large enough)
+        if n1r < 1 || n1c < 1 || n2r > N_objY || n2c > N_objX
+            error('Subregion indices out of bounds. Increase N_obj or check idx_X/idx_Y.');
+        end
+
+        Psi0 = O(n1r:n2r, n1c:n2c) .* P;   % frequency subregion * pupil
+        psi0 = IFT(Psi0);                  % estimated low-res field
+        I_est = abs(psi0).^2;
+        
+        % measured image: assume stack order matches LED list
+        I_mea = ImagesIn(:,:,i);
+        if i==17
+            figure;
+            subplot(1,2,1); imshow(abs(P), []); title('Amplitude');
+            subplot(1,2,2); imshow(abs(I_mea), []); title('Phase');
+            fprintf('I_mea class: %s\n', class(I_mea));
+            fprintf('P class: %s\n', class(P));
+            disp(P(1,1))
+            disp(I_mea(1,1))
+            disp(I_est(1,1))
+            disp(sum(sum(sqrt(abs(I_est)))))
+            disp(sum(sum(sqrt(abs(I_mea)))))
+
+        end
+        % intensity correction update (after first iter)
+        if it > 1 && options.IntCorr == 1
+            % scalar factor for this LED cell
+            
+            %c(i) = sum(sum(sqrt(abs(I_est)))) / (sum(sum(sqrt(abs(I_mea)))));
+            %fprintf('c is: %s\n', c(i));
+            num=sum(sum(sqrt(max(I_est,0)),'all'));
+            den=sum(sum(sqrt(max(I_mea,0)),'all'));
+
+            if den < 1e-12
+                c(i)=1;
+            else
+                c(i)=num/den;
+            end
+
+            c(i)=min(max(c(i),0.2),5);
+        end
+
+        % forward projection (amplitude replace)
+        Psi = forward_project(psi0, I_mea * c(i), I_est, FT);
+        dPsi = (Psi - Psi0);
+
+        % update O and P (Quasi-Newton / GDUpdate)
+        [O, P] = GDUpdate_rank1(O, P, dPsi, max(abs(O(:))), cen, pupil0, options.alpha, options.beta);
+
+        % measure error for this LED
+        err_iter(i) = rms(I_mea(:) - I_est(:));
+        if it > 1 && options.IntCorr == 1
+            ImagesIn(:,:,i) = ImagesIn(:,:,i) .* c(i);
+        end
+        % [idx_X, idx_Y] = LEDsPosCorrection(O, P, I_mea, m, idx_X, idx_Y, cen0, mx, options, c,Ny, Nx,IFT);
+    end
+
+    err_curve(it) = mean(err_iter);
+    fprintf('Iter %d/%d  RMSE=%.5f\n', it, options.maxIter, err_curve(it));
+end
+
+%% 8) outputs
+O_rec = IFT(O);
+phase_rec = angle(O_rec);
+P_rec = P;
+
+
+end

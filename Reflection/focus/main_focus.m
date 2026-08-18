@@ -1,0 +1,56 @@
+clear; close all; clc;
+
+
+
+%%
+EXPOSURE_US = 1500000;        % 1.5 seconds (Note: 2000000 us = 2s; if you meant 20ms, use 20000)
+GAIN        = 0;
+METHOD      = 'laplacian';  % Focus metric: 'laplacian' | 'tenengrad' | 'variance'
+
+% ROI: 50% centered window of a 2736×2192 sensor
+W = 2736; H = 2192;
+w = floor(W/2); h = floor(H/2);
+x = floor((W - w)/2) + 1;   % -> 685
+y = floor((H - h)/2) + 1;   % -> 549
+ROI = [x y w h];            % [685 549 1368 1096]
+
+%% Create NeoPixel Object for LED control
+% *Create Arduino object*
+
+a=arduino('COM6','Mega2560','Libraries','Adafruit/NeoPixel');  %choose the port
+
+
+% The following instantiation of NeoPixel object uses the default
+% |Brightness| value of 25%.
+nstrip = addon(a, 'Adafruit/NeoPixel', 'D7', 16, 'NeoPixelType', 'GRB');
+
+%% 
+
+%% blinks LEDs for alignments - center, x-y limits
+% Each LEDs have different positioned RGB : Best is measurement
+
+%% Test 0 : center BF LED nr = 16
+writeColor(nstrip, 16, 'red');  %the color can be change here
+nstrip.Brightness = 0.9; % 0 - 1
+brightness = nstrip.Brightness;
+
+
+
+%% Step 2: Open camera and enter real-time focusing mode
+%% ---- Initialize camera (software trigger) ----
+vid = init_camera_soft(EXPOSURE_US, GAIN);  % Requires init_camera_soft.m in your path
+
+% cleanup_cam = onCleanup(@() safe_release_cam(vid));
+
+%% ---- Run manual focus assistant (Real-time image + score curve) ----
+[bestScore, ~] = focus_assist_manual(vid, METHOD, ROI);  % Does not save images
+fprintf('[Focus] Completed, bestScore = %.4g\n', bestScore);
+     
+%% Step 3: Turn off LED after focusing is complete
+
+writeColor(nstrip, 16, [0,0,0])
+
+%%
+for n = 1:1:16    % 16:-1:1
+    writeColor(nstrip, n, [0,0,0])
+end

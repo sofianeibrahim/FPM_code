@@ -1,0 +1,42 @@
+function frame = snap_shot(vid, src, timeout_s)
+% Trigger and capture one frame (returns the camera's native data type, commonly uint16)
+% Usage：raw = snap_shot(vid, src);
+if nargin < 3, timeout_s = 6; end
+
+% 1) % Clear old frames from the acquisition queue (to avoid retrieving leftover frames from the previous illumination)
+try
+    n = vid.FramesAvailable;
+    if n > 0, getdata(vid, n); end
+catch
+    % Ignore
+end
+
+% 2) Trigger one frame
+didTrigger = false;
+try
+    executeCommand(src, 'TriggerSoftware');  % Most GenTL/Spinnaker implementations support this
+    didTrigger = true;
+catch
+    try
+        trigger(vid);                        % Compatible with some adapters
+        didTrigger = true;
+    catch
+        % Trigger failed
+    end
+end
+if ~didTrigger
+    error('snap_shot:triggerFail','无法触发相机采集。');
+end
+
+% 3) Wait for frame arrival (with timeout）
+t0 = tic;
+while vid.FramesAvailable < 1
+    pause(0.001);
+    if toc(t0) > timeout_s
+        error('snap_shot:timeout','No frame arrived after waiting %.2f s', timeout_s);
+    end
+end
+
+% 4) Acquire one frame and return it
+frame = getdata(vid, 1);   % Type determined by the camera (commonly uint16）
+end

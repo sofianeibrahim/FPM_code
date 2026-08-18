@@ -1,0 +1,118 @@
+%%
+clc,clear;
+%%
+% 你已有的每环(0..7)的LED十六进制编号列表
+ring0 = {'77'};
+ring1 = {'67','68','78','88','87','86','76','66'};
+ring2 = {'56','57','58','59','69','79','89','99','98','97','96','95',...
+    '85','75','65','55'};
+ring3 = {'45','46','47', ...
+         '48','49','4a', ...
+         '5a','6a','7a', ...
+         '8a','9a','aa', ...
+         'a9','a8','a7', ...
+         'a6','a5','a4','94','84','74','64','54','44'};
+ring4 = {'34','35','36','37','38','39','3a','3b','4b', ...
+         '5b','6b','7b','8b','9b','ab','bb','ba', ...
+         'b9','b8','b7','b6','b5','b4','b3','a3', ...
+         '93','83','73','63','53','43','33'};
+ring5 = {'23','24','25','26','27','28','29','2a',...
+        '2b','2c','3c','4c','5c','6c','7c','8c',...
+        '9c','ac','bc','cc','cb','ca','c9','c8',...
+        'c7','c6','c5','c4','c3','c2','b2','a2',...
+        '92','82','72','62','52','42','32','22'};
+ring6 = {'12','13','14','15','16','17','18','19',...
+        '1a','1b','1c','2d','3d','4d','5d','6d',...
+        '7d','8d','9d','ad','bd','cd','dc','db',...
+        'da','d9','d8','d7','d6','d5','d4','d3',...
+        'd2','c1','b1','a1','91','81','71','61',...
+        '51','41','31','21'};
+ring7 = {'03','04','05','06',...
+        '07','08','09','0a','0b','3e','4e','5e',...
+        '6e','7e','8e','9e','ae','be','eb','ea',...
+        'e9','e8','e7','e6','e5','e4','e3','b0',...
+        'a0','90','80','70','60','50','40','30'};
+%% HDR 合成脚本
+% 输入：多个曝光文件夹（命名一致，如 001_77.tif）
+% 输出：HDR tiff 到 outFolder
+sourceFolder = "C:\Users\I_MSI\Documents\SUPOP\3A\IMEC_internship\FPM\Run_matlab\capture code\capture code\capture\Capture\capture_20260604_102114";
+subFolders = {'ring_min_','ring_low_','ring_mid_','ring_high_','ring_max_'};
+
+% 拼接成完整路径
+folders = fullfile(sourceFolder, subFolders);
+% folders = {'Exp_mini','Exp_low','Exp_mid','Exp_high','Exp_max','Exp_ultra'}; % 6 档时
+
+outFolder = fullfile(sourceFolder, 'HDR_tiff');
+if ~exist(outFolder,'dir'), mkdir(outFolder); end
+
+%% Exposure time per frame (same as during capture!)
+% exp_by_ring_mini =[60000, 60000, 60000, 60000, 100000, 100000, 150000, 200000]*1e-6;
+% exp_by_ring_low = [100000, 100000, 100000, 100000, 150000, 150000, 200000, 250000]*1e-6;
+% exp_by_ring_mid  =[120000, 120000, 120000, 120000, 180000 ,180000, 220000, 280000]*1e-6;
+% exp_by_ring_high =[150000, 150000, 150000, 150000, 200000, 200000, 250000, 300000]*1e-6;
+% exp_by_ring_max = [180000, 180000, 180000, 180000, 220000, 220000, 280000, 320000]*1e-6;
+
+exp_by_ring_mini =[60000, 60000, 60000,]*1e-6;
+exp_by_ring_low = [100000, 100000, 100000]*1e-6;
+exp_by_ring_mid  =[120000, 120000, 120000]*1e-6;
+exp_by_ring_high =[150000, 150000, 150000]*1e-6;
+exp_by_ring_max = [180000, 180000, 180000]*1e-6;
+
+
+% If there are 6 levels, define exp_by_ring_mini / ... / exp_by_ring_max according to the method above.
+
+%% ---- ring 编号表（你之前写好的） ----
+%ringLists = {ring0, ring1, ring2, ring3, ring4, ring5, ring6, ring7};
+ringLists = {ring0, ring1, ring2};
+led2ring = containers.Map;
+for r = 1:3
+    for t = 1:numel(ringLists{r})
+        led2ring( lower(ringLists{r}{t}) ) = r;
+    end
+end
+%%
+K = keys(led2ring);
+V = values(led2ring);
+
+% for i = 1:30   % 只看前10个，防止太长
+%     fprintf('LED %s 属于 ring %d\n', K{i}, V{i});
+% end
+%% 主列表：以第一个文件夹为准
+L = dir(fullfile(folders{1}, '*.tiff'));
+nImgs = numel(L);
+
+for i = 1:nImgs
+    fname = L(i).name;   % 例如 '013_59.tif'
+    parts = split(fname, {'_', '.'});
+    ledHex = lower(parts{2});   % 提取 '59'
+
+    if ~isKey(led2ring, ledHex)
+        error('未找到 LED 编号 %s 对应的 ring', ledHex);
+    end
+    r = led2ring(ledHex);   % 该 LED 所属 ring
+
+    % 曝光时间数组（这里是3档；如果6档，就写成6个）
+    %times = [exp_by_ring_mini(r),exp_by_ring_low(r), exp_by_ring_mid(r),exp_by_ring_high(r), exp_by_ring_max(r)];
+    times= [exp_by_ring_low(r)];
+    % 同一张图的不同时刻文件
+    files = cell(1, numel(folders));
+    for f = 1:numel(folders)
+        files{f} = fullfile(folders{f}, fname);
+    end
+
+    % HDR 合成
+    % hdr = makehdr(files, 'RelativeExposure', times);
+    imgs = cellfun(@(f) double(imread(f)), files, 'UniformOutput', false);
+    imgs = cat(3, imgs{:});
+    % 按曝光时间归一化
+    for k = 1:numel(times)
+        imgs(:,:,k) = imgs(:,:,k) / times(k);
+    end
+    hdr = mean(imgs, 3);   % 或者用 median 更 robust
+
+    % 保存 16-bit tiff（保持线性）
+    outName = fullfile(outFolder, fname);
+    hdr = hdr / max(hdr(:));  % 全局归一化
+    imwrite(uint16(hdr * 65535), outName);
+end
+
