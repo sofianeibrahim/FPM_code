@@ -2,7 +2,7 @@
 %%
 clc,clear;
 %%
-addpath(genpath("C:\Users\Public\Documents\FPM\Run_matlab\Sofiane_code\Reconstruction\BM3D"));
+addpath(genpath("...\Reconstruction\BM3D")); %add path of BM3D
 
 %% ---- System parameters ----
 systemSetup = struct();
